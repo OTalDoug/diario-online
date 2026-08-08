@@ -974,7 +974,7 @@ function exportarCSV() {
 
 function escaparCSV(valor) { return `"${String(valor ?? '').replace(/"/g, '""')}"`; }
 
-function copiarTexto(texto) {
+async function copiarTexto(texto) {
       if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(texto);
       const area = document.createElement('textarea');
       area.value = texto; area.style.position='fixed'; area.style.opacity='0'; document.body.appendChild(area); area.select();
@@ -1331,7 +1331,7 @@ function trocarAnoLetivo() {
       atualizarEstadoAnoUI();
     }
 
-function criarNovoAnoLetivo() {
+async function criarNovoAnoLetivo() {
       const sugestao = String(Number(state.anoAtual) + 1);
       const informado = prompt('Qual ano letivo deseja criar?', sugestao);
       if (informado === null) return;
@@ -1373,7 +1373,7 @@ function criarNovoAnoLetivo() {
       alert(`Ano letivo ${ano} criado. A planilha anual será preparada automaticamente no Google Drive.`);
     }
 
-function encerrarAnoLetivo() {
+async function encerrarAnoLetivo() {
       if (anoEncerrado()) return;
 
       const ano = String(state.anoAtual);
@@ -1517,7 +1517,7 @@ function atualizarAcoesTurma() {
       els.btnExcluirTurma.disabled = fechado || !existe;
     }
 
-function alternarArquivoTurma() {
+async function alternarArquivoTurma() {
       if (anoEncerrado()) return alert('Este ano letivo está encerrado.');
       const turma = state.turmas[els.selectTurmaGestao.value];
       if (!turma) return;
@@ -1550,7 +1550,7 @@ function alternarArquivoTurma() {
       renderRelatorio();
     }
 
-function excluirTurmaDefinitivamente() {
+async function excluirTurmaDefinitivamente() {
       if (anoEncerrado()) return alert('Este ano letivo está encerrado.');
       const turma = state.turmas[els.selectTurmaGestao.value];
       if (!turma) return;
@@ -1659,7 +1659,7 @@ function confirmarMovimentacao() {
       alert('Movimentação registrada. O histórico anterior foi preservado.');
     }
 
-function salvarAula() {
+async function salvarAula() {
       if (anoEncerrado()) return alert('Este ano letivo está encerrado e não aceita novas alterações.');
 
       const turma = obterTurmaAtual();
@@ -1701,7 +1701,7 @@ function salvarAula() {
       renderRelatorio();
     }
 
-function sincronizarAula(aula) {
+async function sincronizarAula(aula) {
       if (!navigator.onLine) return 'pendente';
 
       const turma = state.turmas[aula.turmaId];
@@ -1753,7 +1753,7 @@ function sincronizarAula(aula) {
       }
     }
 
-function sincronizarAcaoServidor(payload) {
+async function sincronizarAcaoServidor(payload) {
       if (!navigator.onLine) return false;
 
       try {

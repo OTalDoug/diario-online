@@ -1696,9 +1696,29 @@ async function salvarAula() {
       atualizarSyncStatus(resultado);
 
       alert(resultado === 'enviado'
-        ? `Aula de ${state.anoAtual} salva localmente e enviada ao Google Sheets.`
+        ? `Aula de ${state.anoAtual} salva localmente e enviada para sincronização com o Google Sheets.`
         : 'Aula salva no aparelho. O envio ao Google ficou pendente.');
       renderRelatorio();
+    }
+
+
+    async function chamarServidor(payload) {
+      if (!navigator.onLine) {
+        throw new Error('Sem conexão com a internet.');
+      }
+
+      await fetch(GOOGLE_WEBHOOK_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: {
+          'Content-Type': 'text/plain;charset=utf-8'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      // Em mode:no-cors a resposta é opaca. Se o fetch não lançou erro,
+      // consideramos que o pedido foi enviado ao endpoint.
+      return { result: 'sucesso', enviado: true, confirmacao: false };
     }
 
 async function sincronizarAula(aula) {

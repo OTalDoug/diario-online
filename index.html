@@ -567,6 +567,17 @@
         <button id="btn-novo-ano" class="btn-secondary" type="button">＋ Criar novo ano letivo</button>
         <button id="btn-encerrar-ano" class="btn-warning" type="button">Encerrar ano letivo atual</button>
       </div>
+
+      <div class="card">
+        <div class="card-title">Privacidade neste aparelho</div>
+        <p class="small-note" style="margin-bottom:12px;">
+          Os dados offline são armazenados de forma criptografada neste dispositivo.
+          Use a opção abaixo antes de emprestar, vender ou deixar de utilizar este aparelho.
+        </p>
+        <button class="btn-danger" type="button" onclick="limparDadosDesteAparelho()">
+          Apagar dados locais deste aparelho
+        </button>
+      </div>
       <div class="card">
         <div class="card-title">Criar Turma</div>
         <div class="form-group">
@@ -646,9 +657,10 @@
     const GOOGLE_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbxQF4frxax9vMlcqu-fkXXAb0lcErMs0BlccFP0rIHGd4Rpd-MWMlMm52LRpxfgDmscLw/exec';
 
     const STORAGE_KEY = 'diario_classe_db';
+    const STORAGE_KEY_ENC = 'diario_classe_db_encrypted';
     const DB_VERSION = 4;
 
-    let state = carregarEstado();
+    let state = null;
     let alunosEstadoAtual = {};
     let aulaAtualId = null;
     let movimentacaoAlunoId = null;
@@ -725,7 +737,7 @@
       `;
     }
 
-    function iniciarAppSeguro() {
+    async function iniciarAppSeguro() {
       const token = solicitarChaveAcesso();
 
       if (!token) {
@@ -733,7 +745,17 @@
         return;
       }
 
-      iniciarApp();
+      try {
+        state = await carregarEstadoSeguro(token);
+        iniciarApp();
+      } catch (error) {
+        console.error('Falha ao abrir os dados locais protegidos:', error);
+        sessionStorage.removeItem(AUTH_SESSION_KEY);
+        bloquearInterface(
+          'Não foi possível abrir os dados locais deste aparelho. ' +
+          'A chave pode estar incorreta ou os dados locais podem ter sido corrompidos.'
+        );
+      }
     }
 
     function bloquearDiario() {
@@ -802,7 +824,6 @@ function migrarParaV3(antigo) {
           });
         });
         antigo.version = DB_VERSION;
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(antigo));
         return antigo;
       }
 
@@ -859,7 +880,6 @@ function migrarParaV3(antigo) {
       });
 
       novo.aulas = [...grupos.values()];
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(novo));
       return novo;
     }
 
@@ -1244,41 +1264,180 @@ function migrarParaV4(antigo) {
       return novo;
     }
 
-function carregarEstado() {
-      const bruto = localStorage.getItem(STORAGE_KEY);
-      if (!bruto) return criarEstadoInicial();
-
-      try {
-        const salvo = JSON.parse(bruto);
-        const novo = migrarParaV4(salvo);
-        persistirEstadoV4(novo);
-        return novo;
-      } catch (error) {
-        console.error('Falha ao carregar os dados locais:', error);
-        alert('Os dados locais estavam inválidos. Um novo banco foi iniciado.');
-        return criarEstadoInicial();
+function bytesParaBase64(bytes) {
+      let binario = '';
+      const arr = new Uint8Array(bytes);
+      for (let i = 0; i < arr.length; i++) {
+        binario += String.fromCharCode(arr[i]);
       }
+      return btoa(binario);
     }
 
-function persistirEstadoV4(obj = state) {
+    function base64ParaBytes(base64) {
+      const binario = atob(base64);
+      const bytes = new Uint8Array(binario.length);
+      for (let i = 0; i < binario.length; i++) {
+        bytes[i] = binario.charCodeAt(i);
+      }
+      return bytes;
+    }
+
+    async function derivarChaveLocal(token, salt) {
+      const encoder = new TextEncoder();
+
+      const material = await crypto.subtle.importKey(
+        'raw',
+        encoder.encode(token),
+        'PBKDF2',
+        false,
+        ['deriveKey']
+      );
+
+      return crypto.subtle.deriveKey(
+        {
+          name: 'PBKDF2',
+          salt,
+          iterations: 250000,
+          hash: 'SHA-256'
+        },
+        material,
+        {
+          name: 'AES-GCM',
+          length: 256
+        },
+        false,
+        ['encrypt', 'decrypt']
+      );
+    }
+
+    async function criptografarEstadoLocal(obj, token) {
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const chave = await derivarChaveLocal(token, salt);
+      const encoder = new TextEncoder();
+
       const serializavel = {
         version: DB_VERSION,
         anoAtual: String(obj.anoAtual),
         anos: obj.anos
       };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(serializavel));
+
+      const cifrado = await crypto.subtle.encrypt(
+        {
+          name: 'AES-GCM',
+          iv
+        },
+        chave,
+        encoder.encode(JSON.stringify(serializavel))
+      );
+
+      return {
+        v: 1,
+        alg: 'AES-GCM',
+        kdf: 'PBKDF2-SHA256',
+        iterations: 250000,
+        salt: bytesParaBase64(salt),
+        iv: bytesParaBase64(iv),
+        data: bytesParaBase64(cifrado)
+      };
     }
 
-function salvarEstado() {
+    async function descriptografarEstadoLocal(pacote, token) {
+      if (!pacote || pacote.v !== 1 || !pacote.salt || !pacote.iv || !pacote.data) {
+        throw new Error('Formato de armazenamento local inválido.');
+      }
+
+      const salt = base64ParaBytes(pacote.salt);
+      const iv = base64ParaBytes(pacote.iv);
+      const cifrado = base64ParaBytes(pacote.data);
+      const chave = await derivarChaveLocal(token, salt);
+
+      const aberto = await crypto.subtle.decrypt(
+        {
+          name: 'AES-GCM',
+          iv
+        },
+        chave,
+        cifrado
+      );
+
+      const decoder = new TextDecoder();
+      return JSON.parse(decoder.decode(aberto));
+    }
+
+    async function carregarEstadoSeguro(token) {
+      const criptografado = localStorage.getItem(STORAGE_KEY_ENC);
+
+      if (criptografado) {
+        const pacote = JSON.parse(criptografado);
+        const salvo = await descriptografarEstadoLocal(pacote, token);
+        return migrarParaV4(salvo);
+      }
+
+      // Migração automática da versão antiga em texto puro, caso exista.
+      const legado = localStorage.getItem(STORAGE_KEY);
+
+      if (legado) {
+        const salvo = JSON.parse(legado);
+        const migrado = migrarParaV4(salvo);
+        await persistirEstadoSeguro(migrado, token);
+        localStorage.removeItem(STORAGE_KEY);
+        return migrado;
+      }
+
+      const novo = criarEstadoInicial();
+      await persistirEstadoSeguro(novo, token);
+      return novo;
+    }
+
+    async function persistirEstadoSeguro(obj = state, token = obterTokenSessao()) {
+      if (!token) {
+        throw new Error('Chave de sessão indisponível.');
+      }
+
+      const pacote = await criptografarEstadoLocal(obj, token);
+      localStorage.setItem(STORAGE_KEY_ENC, JSON.stringify(pacote));
+      localStorage.removeItem(STORAGE_KEY);
+    }
+
+    function persistirEstadoV4(obj = state) {
+      persistirEstadoSeguro(obj).catch(error => {
+        console.error('Falha ao proteger os dados locais:', error);
+      });
+    }
+
+    function salvarEstado() {
       try {
         sincronizarAliasesAno();
-        persistirEstadoV4(state);
+
+        persistirEstadoSeguro(state).catch(error => {
+          console.error('Falha ao salvar localmente com criptografia:', error);
+          alert('A alteração foi mantida nesta sessão, mas não foi possível proteger e salvar os dados neste aparelho.');
+        });
+
         return true;
       } catch (error) {
         console.error('Falha ao salvar localmente:', error);
         alert('Não foi possível salvar os dados no navegador.');
         return false;
       }
+    }
+
+    async function limparDadosDesteAparelho() {
+      const ok = confirm(
+        'Apagar todos os dados locais deste aparelho?\n\n' +
+        'Isso remove turmas, chamadas e informações guardadas offline neste navegador. ' +
+        'Os registros já enviados ao Google Sheets não serão apagados.'
+      );
+
+      if (!ok) return;
+
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(STORAGE_KEY_ENC);
+      sessionStorage.removeItem(AUTH_SESSION_KEY);
+
+      alert('Dados locais removidos deste aparelho.');
+      location.reload();
     }
 
 function ativarAnoNoEstado(obj, ano) {

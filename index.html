@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -9,16 +10,33 @@
 <body>
 
   <h1>Diário Online</h1>
-  <p>Teste de comunicação com o Google Apps Script.</p>
+
+  <p>Teste de gravação no Google Sheets.</p>
 
   <form
     action="https://script.google.com/macros/s/AKfycbxQF4frxax9vMlcqu-fkXXAb0lcErMs0BlccFP0rIHGd4Rpd-MWMlMm52LRpxfgDmscLw/exec"
     method="POST"
     target="_blank"
   >
-    <input type="hidden" name="teste" value="github">
-    <button type="submit">Testar conexão</button>
+
+    <input
+      type="hidden"
+      name="origem"
+      value="GitHub Pages"
+    >
+
+    <input
+      type="hidden"
+      name="mensagem"
+      value="Teste de gravação do Diário Online"
+    >
+
+    <button type="submit">
+      Gravar teste no Sheets
+    </button>
+
   </form>
 
 </body>
+
 </html>

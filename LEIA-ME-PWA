@@ -1,0 +1,20 @@
+DIÁRIO ONLINE — PWA FASE 1
+
+Arquivos para o GitHub:
+- index.html
+- manifest.json
+- icon-192.png
+- icon-512.png
+
+Nesta etapa NÃO foi adicionado service worker.
+Isso é proposital para evitar cache agressivo enquanto validamos a instalação.
+
+COMO SUBIR:
+1. No repositório diario-online, substitua o index.html pelo index.html deste pacote.
+2. Adicione manifest.json, icon-192.png e icon-512.png na raiz do repositório.
+3. Faça o commit.
+4. Abra https://otaldoug.github.io/diario-online/
+5. Force atualização uma vez (Ctrl+F5 no computador).
+6. No celular, remova um atalho antigo do Diário se houver e adicione novamente à Tela de Início.
+
+Se o app abrir sem a barra normal do navegador e com o ícone próprio, a Fase 1 do PWA está correta.

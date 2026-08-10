@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
-
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,33 +9,57 @@
 <body>
 
   <h1>Diário Online</h1>
-
-  <p>Teste de gravação no Google Sheets.</p>
+  <p>Teste de envio estruturado.</p>
 
   <form
+    id="form-teste"
     action="https://script.google.com/macros/s/AKfycbxQF4frxax9vMlcqu-fkXXAb0lcErMs0BlccFP0rIHGd4Rpd-MWMlMm52LRpxfgDmscLw/exec"
     method="POST"
     target="_blank"
   >
-
-    <input
-      type="hidden"
-      name="origem"
-      value="GitHub Pages"
-    >
-
-    <input
-      type="hidden"
-      name="mensagem"
-      value="Teste de gravação do Diário Online"
-    >
+    <input type="hidden" id="payload" name="payload">
 
     <button type="submit">
-      Gravar teste no Sheets
+      Enviar aula de teste
     </button>
-
   </form>
 
-</body>
+  <script>
+    const form = document.getElementById('form-teste');
+    const inputPayload = document.getElementById('payload');
 
+    form.addEventListener('submit', function() {
+
+      const payload = {
+        acao: "salvarAula",
+        aulaId: "teste_001",
+
+        registros: [
+          {
+            data: "2026-08-09",
+            turma: "Turma 101",
+            aluno: "Ana Silva",
+            status: "Presente",
+            visto: "Sim",
+            conteudo: "Teste de integração do Diário",
+            anotacoes: "Primeiro payload estruturado"
+          },
+
+          {
+            data: "2026-08-09",
+            turma: "Turma 101",
+            aluno: "Bruno Souza",
+            status: "Falta",
+            visto: "Nao",
+            conteudo: "Teste de integração do Diário",
+            anotacoes: "Primeiro payload estruturado"
+          }
+        ]
+      };
+
+      inputPayload.value = JSON.stringify(payload);
+    });
+  </script>
+
+</body>
 </html>

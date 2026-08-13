@@ -449,6 +449,56 @@
       margin-bottom: 12px;
     }
 
+  
+    .student-report-chip {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      padding: 3px 7px;
+      border-radius: 999px;
+      font-size: 0.68rem;
+      font-weight: 800;
+      background: var(--blue-bg);
+      color: var(--blue-text);
+      cursor: pointer;
+      border: 0;
+    }
+
+    .student-info.clickable {
+      cursor: pointer;
+    }
+
+    .student-info.clickable:hover {
+      color: var(--primary);
+    }
+
+    .unsaved-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 0.74rem;
+      font-weight: 800;
+      background: var(--amber-bg);
+      color: var(--amber-text);
+    }
+
+    .report-note-preview {
+      font-size: 0.74rem;
+      color: var(--blue-text);
+      background: var(--blue-bg);
+      border-radius: 8px;
+      padding: 7px 9px;
+      line-height: 1.35;
+      cursor: pointer;
+    }
+
+    .management-student-main {
+      min-width: 0;
+      flex: 1;
+    }
+
   </style>
 </head>
 
@@ -497,6 +547,7 @@
         <div class="status-row">
           <span id="modo-aula-status" class="status-pill">Nova aula</span>
           <span id="sync-status" class="status-pill">Somente local</span>
+          <span id="unsaved-status" class="unsaved-pill" style="display:none;">● Alterações não salvas</span>
         </div>
 
         <p class="small-note">
@@ -577,6 +628,9 @@
         <button class="btn-danger" type="button" onclick="limparDadosDesteAparelho()">
           Apagar dados locais deste aparelho
         </button>
+        <button class="btn-secondary" type="button" style="margin-top:8px;" onclick="limparDadosTesteAntigos()">
+          Remover dados de teste antigos
+        </button>
       </div>
       <div class="card">
         <div class="card-title">Criar Turma</div>
@@ -620,6 +674,60 @@
       </div>
     </section>
   </main>
+
+  <dialog id="editar-aluno-dialog">
+    <div class="dialog-body">
+      <div class="card-title">Editar aluno</div>
+
+      <div class="form-group">
+        <label for="editar-aluno-nome">Nome do aluno</label>
+        <input type="text" id="editar-aluno-nome" />
+      </div>
+
+      <div class="form-group">
+        <label for="editar-aluno-avaliacao">Forma de avaliação</label>
+        <select id="editar-aluno-avaliacao">
+          <option value="regular">Regular</option>
+          <option value="relatorio">Relatório descritivo</option>
+        </select>
+      </div>
+
+      <p class="small-note">
+        Alterar o nome não cria um novo aluno: o identificador e o histórico permanecem os mesmos.
+      </p>
+
+      <div class="dialog-actions">
+        <button id="btn-cancelar-edicao-aluno" class="btn-secondary" type="button">Cancelar</button>
+        <button id="btn-confirmar-edicao-aluno" class="btn-primary" type="button">Salvar alterações</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="relato-aluno-dialog">
+    <div class="dialog-body">
+      <div class="card-title">Registro pedagógico da aula</div>
+      <p id="relato-aluno-identificacao" class="small-note" style="margin-bottom:12px;"></p>
+
+      <div class="form-group">
+        <label for="relato-aluno-texto">Participação e desenvolvimento nesta aula</label>
+        <textarea
+          id="relato-aluno-texto"
+          style="min-height:150px;"
+          placeholder="Ex.: participou da atividade com mediação; demonstrou maior autonomia; interagiu com os colegas..."
+        ></textarea>
+      </div>
+
+      <p class="small-note">
+        Registre apenas observações pedagógicas necessárias ao acompanhamento do aluno.
+      </p>
+
+      <div class="dialog-actions">
+        <button id="btn-cancelar-relato" class="btn-secondary" type="button">Cancelar</button>
+        <button id="btn-confirmar-relato" class="btn-primary" type="button">Salvar registro</button>
+      </div>
+    </div>
+  </dialog>
+
 
   <dialog id="movimentacao-dialog">
     <div class="dialog-body">
@@ -2094,6 +2202,1006 @@ async function sincronizarAcaoServidor(payload) {
         return false;
       }
     }
+
+    /* =========================================================
+       V5 — AVALIAÇÃO POR RELATÓRIO + REGISTROS PEDAGÓGICOS
+            + PROTEÇÃO CONTRA TROCA SEM SALVAR
+       ========================================================= */
+
+    let alteracoesNaoSalvas = false;
+    let contextoAulaAtual = { turmaId: null, data: null, ano: null };
+    let alunoEdicaoId = null;
+    let alunoRelatoId = null;
+    let ignorarProtecaoTroca = false;
+
+    function criarAluno(nome, dataEntrada = null, id = null) {
+      return {
+        id: id || gerarId('aluno'),
+        nome,
+        status: 'ativo',
+        dataEntrada: dataEntrada || null,
+        dataSaida: null,
+        motivoSaida: null,
+        turmaDestinoId: null,
+        formaAvaliacao: 'regular'
+      };
+    }
+
+    function criarEstadoInicial() {
+      const ano = String(new Date().getFullYear());
+      const novo = {
+        version: DB_VERSION,
+        anoAtual: ano,
+        anos: {
+          [ano]: {
+            status: 'ativo',
+            criadoEm: new Date().toISOString(),
+            turmas: {},
+            aulas: [],
+            rascunhos: {}
+          }
+        }
+      };
+
+      ativarAnoNoEstado(novo, ano);
+      return novo;
+    }
+
+    function turmaFicticiaPadrao(turma) {
+      if (!turma || turma.nome !== 'Turma 101') return false;
+      const nomes = (turma.alunos || []).map(a => a.nome).sort();
+      const padrao = ['Ana Silva','Bruno Souza','Carla Lima','Diego Alves','Elena Rocha'].sort();
+      return nomes.length === padrao.length && nomes.every((n, i) => n === padrao[i]);
+    }
+
+    function normalizarAlunoV5(aluno) {
+      aluno.formaAvaliacao = aluno.formaAvaliacao === 'relatorio' ? 'relatorio' : 'regular';
+      return aluno;
+    }
+
+    function migrarParaV4(antigo) {
+      if (antigo && antigo.version === 4 && antigo.anos) {
+        const anos = Object.keys(antigo.anos);
+        const ano = String(antigo.anoAtual || anos[0] || new Date().getFullYear());
+
+        if (!antigo.anos[ano]) {
+          antigo.anos[ano] = {
+            status:'ativo',
+            criadoEm:new Date().toISOString(),
+            turmas:{},
+            aulas:[],
+            rascunhos:{}
+          };
+        }
+
+        Object.values(antigo.anos).forEach(d => {
+          d.status = d.status || 'ativo';
+          d.turmas = d.turmas || {};
+          d.aulas = Array.isArray(d.aulas) ? d.aulas : [];
+          d.rascunhos = d.rascunhos && typeof d.rascunhos === 'object' ? d.rascunhos : {};
+
+          Object.values(d.turmas).forEach(t => {
+            if (typeof t.arquivada !== 'boolean') t.arquivada = false;
+            if (!('arquivadaEm' in t)) t.arquivadaEm = null;
+            t.alunos = (t.alunos || []).map(normalizarAlunoV5);
+          });
+
+          Object.entries(d.turmas).forEach(([id, turma]) => {
+            if (turmaFicticiaPadrao(turma)) {
+              delete d.turmas[id];
+              d.aulas = d.aulas.filter(a => a.turmaId !== id);
+              Object.keys(d.rascunhos).forEach(chave => {
+                if (chave.startsWith(id + '__')) delete d.rascunhos[chave];
+              });
+            }
+          });
+        });
+
+        antigo.version = DB_VERSION;
+        antigo.anoAtual = ano;
+        ativarAnoNoEstado(antigo, ano);
+        return antigo;
+      }
+
+      let convertido = antigo;
+      if (!antigo || antigo.version !== 3) {
+        convertido = migrarParaV3(antigo || {});
+      }
+
+      const aulas = Array.isArray(convertido?.aulas) ? convertido.aulas : [];
+      const anoDetectado = String(
+        aulas.find(a => /^\d{4}-/.test(String(a.data || '')))?.data?.slice(0,4)
+        || 2026
+      );
+
+      const turmas = convertido?.turmas || {};
+
+      Object.values(turmas).forEach(t => {
+        t.arquivada = Boolean(t.arquivada);
+        t.arquivadaEm = t.arquivadaEm || null;
+        t.alunos = (t.alunos || []).map(normalizarAlunoV5);
+      });
+
+      Object.entries(turmas).forEach(([id, turma]) => {
+        if (turmaFicticiaPadrao(turma)) delete turmas[id];
+      });
+
+      const novo = {
+        version: DB_VERSION,
+        anoAtual: anoDetectado,
+        anos: {
+          [anoDetectado]: {
+            status: 'ativo',
+            criadoEm: new Date().toISOString(),
+            turmas,
+            aulas: aulas.filter(a => turmas[a.turmaId]),
+            rascunhos: {}
+          }
+        }
+      };
+
+      ativarAnoNoEstado(novo, anoDetectado);
+      return novo;
+    }
+
+    function ativarAnoNoEstado(obj, ano) {
+      ano = String(ano);
+
+      if (!obj.anos[ano]) {
+        obj.anos[ano] = {
+          status: 'ativo',
+          criadoEm: new Date().toISOString(),
+          turmas: {},
+          aulas: [],
+          rascunhos: {}
+        };
+      }
+
+      obj.anos[ano].rascunhos = obj.anos[ano].rascunhos || {};
+      obj.anoAtual = ano;
+      obj.turmas = obj.anos[ano].turmas;
+      obj.aulas = obj.anos[ano].aulas;
+    }
+
+    function sincronizarAliasesAno() {
+      const ano = String(state.anoAtual);
+      if (!state.anos[ano]) return;
+      state.anos[ano].turmas = state.turmas;
+      state.anos[ano].aulas = state.aulas;
+      state.anos[ano].rascunhos = state.anos[ano].rascunhos || {};
+    }
+
+    function chaveRascunho(turmaId, data) {
+      return `${turmaId}__${data}`;
+    }
+
+    function obterRascunho(turmaId, data) {
+      return dadosAnoAtual()?.rascunhos?.[chaveRascunho(turmaId, data)] || null;
+    }
+
+    function salvarRascunhoAtual() {
+      const turma = state.turmas[contextoAulaAtual.turmaId || els.selectTurma.value];
+      const data = contextoAulaAtual.data || els.dataAula.value;
+      if (!turma || !data || anoEncerrado()) return;
+
+      const anoDados = dadosAnoAtual();
+      anoDados.rascunhos = anoDados.rascunhos || {};
+
+      anoDados.rascunhos[chaveRascunho(turma.id, data)] = {
+        turmaId: turma.id,
+        data,
+        conteudo: els.conteudoAula.value,
+        anotacoes: els.anotacoesAula.value,
+        alunos: structuredCloneSeguro(alunosEstadoAtual),
+        atualizadoEm: new Date().toISOString()
+      };
+
+      salvarEstado();
+    }
+
+    function removerRascunho(turmaId, data) {
+      const r = dadosAnoAtual()?.rascunhos;
+      if (!r) return;
+      delete r[chaveRascunho(turmaId, data)];
+    }
+
+    function marcarAlteracaoLocal() {
+      alteracoesNaoSalvas = true;
+      atualizarIndicadorAlteracoes();
+      atualizarSyncStatus('local');
+      salvarRascunhoAtual();
+    }
+
+    function atualizarIndicadorAlteracoes() {
+      if (!els.unsavedStatus) return;
+      els.unsavedStatus.style.display = alteracoesNaoSalvas ? 'inline-flex' : 'none';
+    }
+
+    function carregarOuPrepararAula() {
+      const turma = obterTurmaAtual();
+      const data = els.dataAula.value;
+
+      alunosEstadoAtual = {};
+      aulaAtualId = null;
+
+      if (!turma || !data) {
+        contextoAulaAtual = {
+          turmaId: turma?.id || null,
+          data: data || null,
+          ano: String(state.anoAtual)
+        };
+        alteracoesNaoSalvas = false;
+        atualizarIndicadorAlteracoes();
+        renderChamada();
+        atualizarModoAula(null);
+        return;
+      }
+
+      const aulaExistente = encontrarAula(turma.id, data);
+      const rascunho = obterRascunho(turma.id, data);
+      const fonte = rascunho || aulaExistente;
+
+      if (aulaExistente) aulaAtualId = aulaExistente.id;
+
+      turma.alunos.forEach(aluno => {
+        const ativo = alunoAtivoNaData(aluno, data);
+        const salvo = fonte?.alunos?.[aluno.id];
+
+        alunosEstadoAtual[aluno.id] = salvo
+          ? {
+              status: salvo.status,
+              visto: Boolean(salvo.visto),
+              computar: salvo.computar !== false,
+              relato: salvo.relato || ''
+            }
+          : ativo
+            ? { status: 'Presente', visto: false, computar: true, relato: '' }
+            : { status: 'Inativo', visto: false, computar: false, relato: '' };
+      });
+
+      els.conteudoAula.value = fonte?.conteudo || '';
+      els.anotacoesAula.value = fonte?.anotacoes || '';
+
+      contextoAulaAtual = {
+        turmaId: turma.id,
+        data,
+        ano: String(state.anoAtual)
+      };
+
+      alteracoesNaoSalvas = Boolean(rascunho);
+      atualizarIndicadorAlteracoes();
+      renderChamada();
+      atualizarModoAula(aulaExistente);
+
+      if (rascunho && els.modoAulaStatus) {
+        els.modoAulaStatus.textContent = aulaExistente
+          ? 'Rascunho sobre aula salva'
+          : 'Rascunho recuperado';
+        els.modoAulaStatus.className = 'status-pill pending';
+      }
+    }
+
+    function renderChamada() {
+      const turma = obterTurmaAtual();
+      const data = els.dataAula.value;
+      els.listaChamada.replaceChildren();
+
+      if (!turma) return mostrarVazio(els.listaChamada, 'Nenhuma turma cadastrada.');
+      if (!turma.alunos.length) return mostrarVazio(els.listaChamada, 'Esta turma ainda não possui alunos cadastrados.');
+
+      turma.alunos.forEach(aluno => {
+        normalizarAlunoV5(aluno);
+
+        const ativo = alunoAtivoNaData(aluno, data);
+        const estado = alunosEstadoAtual[aluno.id] || {
+          status: ativo ? 'Presente' : 'Inativo',
+          visto: false,
+          computar: ativo,
+          relato: ''
+        };
+
+        alunosEstadoAtual[aluno.id] = estado;
+
+        const card = document.createElement('div');
+        card.className = `student-card${ativo ? '' : ' inactive'}`;
+
+        const infoWrap = document.createElement('div');
+        infoWrap.className = 'student-info-wrap';
+
+        const info = document.createElement('div');
+        info.className = `student-info${aluno.formaAvaliacao === 'relatorio' ? ' clickable' : ''}`;
+        info.textContent = `👤 ${aluno.nome}`;
+
+        if (aluno.formaAvaliacao === 'relatorio' && ativo) {
+          info.title = 'Abrir registro pedagógico desta aula';
+          info.addEventListener('click', () => abrirRelatoAluno(aluno.id));
+        }
+
+        infoWrap.appendChild(info);
+
+        if (aluno.formaAvaliacao === 'relatorio') {
+          const chip = document.createElement('button');
+          chip.type = 'button';
+          chip.className = 'student-report-chip';
+          chip.textContent = 'RELATÓRIO';
+          chip.disabled = !ativo;
+          chip.addEventListener('click', () => abrirRelatoAluno(aluno.id));
+          infoWrap.appendChild(chip);
+
+          if (estado.relato) {
+            const preview = document.createElement('div');
+            preview.className = 'report-note-preview';
+            preview.textContent = `📝 ${estado.relato.length > 90 ? estado.relato.slice(0, 90) + '…' : estado.relato}`;
+            preview.addEventListener('click', () => abrirRelatoAluno(aluno.id));
+            infoWrap.appendChild(preview);
+          }
+        }
+
+        if (!ativo) {
+          const meta = document.createElement('div');
+          meta.className = 'student-meta';
+          if (aluno.dataEntrada && data < aluno.dataEntrada) {
+            meta.textContent = `Entrada na turma: ${formatarDataBR(aluno.dataEntrada)}`;
+          } else {
+            meta.textContent = statusMovimentacao(aluno).texto;
+          }
+          infoWrap.appendChild(meta);
+        }
+
+        const actions = document.createElement('div');
+        actions.className = 'student-actions';
+
+        const attendance = document.createElement('div');
+        attendance.className = 'attendance-actions';
+
+        ['Presente', 'Falta', 'FJ'].forEach(status => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          const classe = status === 'Presente' ? 'presente' : status === 'Falta' ? 'faltoso' : 'justificada';
+          btn.className = `btn-toggle presence-btn ${estado.status === status ? classe : ''}`;
+          btn.textContent = status === 'Presente' ? 'P' : status === 'Falta' ? 'F' : 'FJ';
+          btn.disabled = !ativo;
+          btn.addEventListener('click', () => definirPresenca(aluno.id, status));
+          attendance.appendChild(btn);
+        });
+
+        const vistoBtn = document.createElement('button');
+        vistoBtn.type = 'button';
+        vistoBtn.className = `btn-toggle visto-btn ${estado.visto ? 'ok' : 'off'}`;
+        vistoBtn.textContent = !ativo
+          ? '—'
+          : estado.status === 'Falta'
+            ? 'Não se aplica'
+            : estado.visto
+              ? 'Visto OK'
+              : 'Sem Visto';
+
+        vistoBtn.disabled = !ativo || estado.status === 'Falta';
+        vistoBtn.addEventListener('click', () => toggleVisto(aluno.id));
+
+        actions.append(attendance, vistoBtn);
+        card.append(infoWrap, actions);
+        els.listaChamada.appendChild(card);
+      });
+
+      atualizarContadores();
+    }
+
+    function abrirRelatoAluno(alunoId) {
+      const turma = obterTurmaAtual();
+      const aluno = turma?.alunos.find(a => a.id === alunoId);
+      if (!aluno || aluno.formaAvaliacao !== 'relatorio') return;
+
+      alunoRelatoId = alunoId;
+      els.relatoAlunoIdentificacao.textContent =
+        `${aluno.nome} • ${turma.nome} • ${formatarDataBR(els.dataAula.value)}`;
+
+      els.relatoAlunoTexto.value = alunosEstadoAtual[alunoId]?.relato || '';
+      els.relatoAlunoDialog.showModal();
+    }
+
+    function confirmarRelatoAluno() {
+      if (!alunoRelatoId) return;
+      const estado = alunosEstadoAtual[alunoRelatoId];
+      if (!estado) return;
+
+      estado.relato = els.relatoAlunoTexto.value.trim();
+      els.relatoAlunoDialog.close();
+      renderChamada();
+      marcarAlteracaoLocal();
+    }
+
+    function abrirEdicaoAluno(alunoId) {
+      const turma = state.turmas[els.selectTurmaGestao.value];
+      const aluno = turma?.alunos.find(a => a.id === alunoId);
+      if (!aluno) return;
+
+      normalizarAlunoV5(aluno);
+      alunoEdicaoId = alunoId;
+      els.editarAlunoNome.value = aluno.nome;
+      els.editarAlunoAvaliacao.value = aluno.formaAvaliacao;
+      els.editarAlunoDialog.showModal();
+    }
+
+    async function confirmarEdicaoAluno() {
+      const turma = state.turmas[els.selectTurmaGestao.value];
+      const aluno = turma?.alunos.find(a => a.id === alunoEdicaoId);
+      if (!aluno) return;
+
+      const nomeNovo = els.editarAlunoNome.value.trim();
+      const avaliacaoNova = els.editarAlunoAvaliacao.value === 'relatorio'
+        ? 'relatorio'
+        : 'regular';
+
+      if (!nomeNovo) return alert('Digite o nome do aluno.');
+
+      const nomeAnterior = aluno.nome;
+      const avaliacaoAnterior = aluno.formaAvaliacao || 'regular';
+
+      aluno.nome = nomeNovo;
+      aluno.formaAvaliacao = avaliacaoNova;
+
+      // O mesmo aluno pode existir em outra turma após transferência.
+      Object.values(state.turmas).forEach(t => {
+        t.alunos.forEach(a => {
+          if (a.id === aluno.id) {
+            a.nome = nomeNovo;
+            a.formaAvaliacao = avaliacaoNova;
+          }
+        });
+      });
+
+      salvarEstado();
+      els.editarAlunoDialog.close();
+      carregarAlunosGestao();
+      carregarOuPrepararAula();
+      renderRelatorio();
+
+      const okServidor = await sincronizarAcaoServidor({
+        acao: 'editarAluno',
+        anoLetivo: String(state.anoAtual),
+        alunoId: aluno.id,
+        nomeAnterior,
+        nomeNovo,
+        formaAvaliacaoAnterior: avaliacaoAnterior,
+        formaAvaliacaoNova: avaliacaoNova
+      });
+
+      alert(okServidor
+        ? 'Cadastro atualizado. O histórico do aluno foi preservado.'
+        : 'Cadastro atualizado neste aparelho. A atualização no Google ficou pendente.');
+    }
+
+    function renderListaGestao(turma) {
+      els.listaAlunosGestao.replaceChildren();
+
+      if (!turma || !turma.alunos.length) {
+        return mostrarVazio(els.listaAlunosGestao, 'Nenhum aluno cadastrado nesta turma.');
+      }
+
+      turma.alunos
+        .slice()
+        .sort((a,b) => a.nome.localeCompare(b.nome,'pt-BR'))
+        .forEach(aluno => {
+          normalizarAlunoV5(aluno);
+
+          const row = document.createElement('div');
+          row.className = 'management-student';
+
+          const main = document.createElement('div');
+          main.className = 'management-student-main';
+
+          const info = document.createElement('div');
+          info.className = 'student-info-wrap';
+
+          const nome = document.createElement('div');
+          nome.className = 'student-info';
+          nome.textContent = aluno.nome;
+          info.appendChild(nome);
+
+          if (aluno.formaAvaliacao === 'relatorio') {
+            const rel = document.createElement('span');
+            rel.className = 'student-report-chip';
+            rel.textContent = 'RELATÓRIO';
+            info.appendChild(rel);
+          }
+
+          const st = statusMovimentacao(aluno);
+          const chip = document.createElement('span');
+          chip.className = `student-status-chip ${st.classe}`;
+          chip.textContent = st.texto;
+          info.appendChild(chip);
+          main.appendChild(info);
+
+          const actions = document.createElement('div');
+          actions.className = 'management-student-actions';
+
+          const editar = document.createElement('button');
+          editar.type = 'button';
+          editar.className = 'btn-small';
+          editar.textContent = 'Editar';
+          editar.addEventListener('click', () => abrirEdicaoAluno(aluno.id));
+          actions.appendChild(editar);
+
+          if (!aluno.dataSaida) {
+            const mover = document.createElement('button');
+            mover.type = 'button';
+            mover.className = 'btn-small move';
+            mover.textContent = 'Transferir';
+            mover.addEventListener('click', () => abrirMovimentacao(aluno.id,'turma'));
+
+            const escola = document.createElement('button');
+            escola.type = 'button';
+            escola.className = 'btn-small school';
+            escola.textContent = 'Saída da escola';
+            escola.addEventListener('click', () => abrirMovimentacao(aluno.id,'escola'));
+
+            actions.append(mover, escola);
+          }
+
+          row.append(main, actions);
+          els.listaAlunosGestao.appendChild(row);
+        });
+    }
+
+    function adicionarAlunosTurma() {
+      if (anoEncerrado()) return alert('Este ano letivo está encerrado.');
+      const turma = state.turmas[els.selectTurmaGestao.value];
+      if (!turma) return alert('Selecione uma turma.');
+      if (turma.arquivada) return alert('Desarquive a turma antes de adicionar alunos.');
+
+      const dataEntrada = els.dataEntradaNovos.value || hojeISO();
+      const nomes = els.listaAlunosTexto.value.split('\n').map(n => n.trim()).filter(Boolean);
+      if (!nomes.length) return alert('Digite pelo menos um nome.');
+
+      let adicionados = 0;
+
+      nomes.forEach(nome => {
+        const existe = turma.alunos.some(
+          a => a.nome.localeCompare(nome,'pt-BR',{sensitivity:'base'}) === 0 && !a.dataSaida
+        );
+
+        if (!existe) {
+          turma.alunos.push(criarAluno(nome, dataEntrada));
+          adicionados++;
+        }
+      });
+
+      salvarEstado();
+      els.listaAlunosTexto.value = '';
+      carregarAlunosGestao();
+
+      if (els.selectTurma.value === turma.id) {
+        carregarOuPrepararAula();
+      }
+
+      alert(adicionados
+        ? `${adicionados} aluno(s) adicionado(s).`
+        : 'Nenhum aluno novo foi adicionado.');
+    }
+
+    function confirmarMovimentacao() {
+      if (anoEncerrado()) return alert('Este ano letivo está encerrado.');
+
+      const origem = state.turmas[els.selectTurmaGestao.value];
+      const aluno = origem?.alunos.find(a => a.id === movimentacaoAlunoId);
+      const tipo = els.movimentacaoTipo.value;
+      const data = els.movimentacaoData.value;
+
+      if (!origem || !aluno || !data) {
+        return alert('Preencha a data da movimentação.');
+      }
+
+      if (tipo === 'turma') {
+        const destino = state.turmas[els.movimentacaoDestino.value];
+        if (!destino || destino.arquivada) {
+          return alert('Selecione uma turma de destino ativa.');
+        }
+
+        aluno.status = 'transferido_turma';
+        aluno.dataSaida = data;
+        aluno.motivoSaida = 'turma';
+        aluno.turmaDestinoId = destino.id;
+
+        const jaExiste = destino.alunos.some(a => a.id === aluno.id && !a.dataSaida);
+
+        if (!jaExiste) {
+          destino.alunos.push({
+            id: aluno.id,
+            nome: aluno.nome,
+            status: 'ativo',
+            dataEntrada: data,
+            dataSaida: null,
+            motivoSaida: null,
+            turmaDestinoId: null,
+            formaAvaliacao: aluno.formaAvaliacao || 'regular'
+          });
+        }
+      } else {
+        aluno.status = 'transferido_escola';
+        aluno.dataSaida = data;
+        aluno.motivoSaida = 'escola';
+        aluno.turmaDestinoId = null;
+      }
+
+      salvarEstado();
+      els.movimentacaoDialog.close();
+      carregarAlunosGestao();
+      carregarOuPrepararAula();
+      renderRelatorio();
+      alert('Movimentação registrada. O histórico anterior foi preservado.');
+    }
+
+    async function confirmarTrocaProtegida(tipo, novoValor, valorAnterior) {
+      if (!alteracoesNaoSalvas || ignorarProtecaoTroca) return true;
+
+      const salvar = confirm(
+        'Há alterações não salvas nesta aula.\n\n' +
+        'Clique em OK para salvar antes de continuar.\n' +
+        'Clique em Cancelar para permanecer nesta aula.'
+      );
+
+      if (!salvar) {
+        return false;
+      }
+
+      const salvo = await salvarAula({ silencioso: true });
+      return Boolean(salvo);
+    }
+
+    async function tratarTrocaTurma(event) {
+      const novo = event.target.value;
+      const anterior = contextoAulaAtual.turmaId;
+
+      if (!anterior || novo === anterior || ignorarProtecaoTroca) {
+        carregarOuPrepararAula();
+        return;
+      }
+
+      event.target.value = anterior;
+
+      if (!(await confirmarTrocaProtegida('turma', novo, anterior))) {
+        return;
+      }
+
+      ignorarProtecaoTroca = true;
+      event.target.value = novo;
+      carregarOuPrepararAula();
+      ignorarProtecaoTroca = false;
+    }
+
+    async function tratarTrocaData(event) {
+      const novo = event.target.value;
+      const anterior = contextoAulaAtual.data;
+
+      if (!anterior || novo === anterior || ignorarProtecaoTroca) {
+        carregarOuPrepararAula();
+        return;
+      }
+
+      event.target.value = anterior;
+
+      if (!(await confirmarTrocaProtegida('data', novo, anterior))) {
+        return;
+      }
+
+      ignorarProtecaoTroca = true;
+      event.target.value = novo;
+      carregarOuPrepararAula();
+      ignorarProtecaoTroca = false;
+    }
+
+    async function tratarTrocaAno(event) {
+      const novo = event.target.value;
+      const anterior = String(contextoAulaAtual.ano || state.anoAtual);
+
+      if (novo === anterior || ignorarProtecaoTroca || !alteracoesNaoSalvas) {
+        trocarAnoLetivoDireto(novo);
+        return;
+      }
+
+      event.target.value = anterior;
+
+      if (!(await confirmarTrocaProtegida('ano', novo, anterior))) {
+        return;
+      }
+
+      ignorarProtecaoTroca = true;
+      event.target.value = novo;
+      trocarAnoLetivoDireto(novo);
+      ignorarProtecaoTroca = false;
+    }
+
+    function trocarAnoLetivoDireto(ano) {
+      sincronizarAliasesAno();
+      ativarAnoNoEstado(state, ano);
+      salvarEstado();
+      atualizarSelectsTurmas();
+      carregarAlunosGestao();
+      carregarOuPrepararAula();
+      renderRelatorio();
+      atualizarEstadoAnoUI();
+    }
+
+    function trocarAnoLetivo() {
+      tratarTrocaAno({ target: els.selectAnoLetivo });
+    }
+
+    function mapearElementos() {
+      els.selectTurma = document.getElementById('select-turma');
+      els.selectTurmaRelatorio = document.getElementById('select-turma-relatorio');
+      els.selectTurmaGestao = document.getElementById('select-turma-gestao');
+      els.selectAnoLetivo = document.getElementById('select-ano-letivo');
+      els.anoStatus = document.getElementById('ano-status');
+      els.btnNovoAno = document.getElementById('btn-novo-ano');
+      els.btnEncerrarAno = document.getElementById('btn-encerrar-ano');
+      els.btnArquivarTurma = document.getElementById('btn-arquivar-turma');
+      els.btnExcluirTurma = document.getElementById('btn-excluir-turma');
+      els.turmaArquivadaAviso = document.getElementById('turma-arquivada-aviso');
+
+      els.dataAula = document.getElementById('data-aula');
+      els.listaChamada = document.getElementById('lista-alunos-chamada');
+      els.conteudoAula = document.getElementById('conteudo-aula');
+      els.anotacoesAula = document.getElementById('anotacoes-aula');
+      els.countPresentes = document.getElementById('count-presentes');
+      els.countFaltas = document.getElementById('count-faltas');
+      els.countFj = document.getElementById('count-fj');
+      els.countVistos = document.getElementById('count-vistos');
+      els.modoAulaStatus = document.getElementById('modo-aula-status');
+      els.syncStatus = document.getElementById('sync-status');
+      els.unsavedStatus = document.getElementById('unsaved-status');
+      els.btnSalvarAula = document.getElementById('btn-salvar-aula');
+      els.btnExportarCsv = document.getElementById('btn-exportar-csv');
+      els.tabelaRelatorio = document.getElementById('tabela-relatorio-body');
+
+      els.novoNomeTurma = document.getElementById('novo-nome-turma');
+      els.listaAlunosTexto = document.getElementById('lista-alunos-texto');
+      els.dataEntradaNovos = document.getElementById('data-entrada-novos');
+      els.listaAlunosGestao = document.getElementById('lista-alunos-gestao');
+      els.btnCriarTurma = document.getElementById('btn-criar-turma');
+      els.btnSalvarAlunos = document.getElementById('btn-salvar-alunos');
+
+      els.movimentacaoDialog = document.getElementById('movimentacao-dialog');
+      els.movimentacaoAluno = document.getElementById('movimentacao-aluno');
+      els.movimentacaoTipo = document.getElementById('movimentacao-tipo');
+      els.movimentacaoDestino = document.getElementById('movimentacao-destino');
+      els.movimentacaoData = document.getElementById('movimentacao-data');
+      els.grupoDestino = document.getElementById('grupo-destino');
+      els.btnCancelarMovimentacao = document.getElementById('btn-cancelar-movimentacao');
+      els.btnConfirmarMovimentacao = document.getElementById('btn-confirmar-movimentacao');
+
+      els.editarAlunoDialog = document.getElementById('editar-aluno-dialog');
+      els.editarAlunoNome = document.getElementById('editar-aluno-nome');
+      els.editarAlunoAvaliacao = document.getElementById('editar-aluno-avaliacao');
+      els.btnCancelarEdicaoAluno = document.getElementById('btn-cancelar-edicao-aluno');
+      els.btnConfirmarEdicaoAluno = document.getElementById('btn-confirmar-edicao-aluno');
+
+      els.relatoAlunoDialog = document.getElementById('relato-aluno-dialog');
+      els.relatoAlunoIdentificacao = document.getElementById('relato-aluno-identificacao');
+      els.relatoAlunoTexto = document.getElementById('relato-aluno-texto');
+      els.btnCancelarRelato = document.getElementById('btn-cancelar-relato');
+      els.btnConfirmarRelato = document.getElementById('btn-confirmar-relato');
+    }
+
+    function registrarEventos() {
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => switchTab(btn.dataset.tab, btn));
+      });
+
+      els.selectAnoLetivo.addEventListener('change', tratarTrocaAno);
+      els.btnNovoAno.addEventListener('click', criarNovoAnoLetivo);
+      els.btnEncerrarAno.addEventListener('click', encerrarAnoLetivo);
+      els.btnArquivarTurma.addEventListener('click', alternarArquivoTurma);
+      els.btnExcluirTurma.addEventListener('click', excluirTurmaDefinitivamente);
+
+      els.selectTurma.addEventListener('change', tratarTrocaTurma);
+      els.dataAula.addEventListener('change', tratarTrocaData);
+      els.selectTurmaRelatorio.addEventListener('change', renderRelatorio);
+      els.selectTurmaGestao.addEventListener('change', carregarAlunosGestao);
+
+      els.conteudoAula.addEventListener('input', marcarAlteracaoLocal);
+      els.anotacoesAula.addEventListener('input', marcarAlteracaoLocal);
+
+      els.btnSalvarAula.addEventListener('click', () => salvarAula());
+      els.btnExportarCsv.addEventListener('click', exportarCSV);
+      els.btnCriarTurma.addEventListener('click', criarTurma);
+      els.btnSalvarAlunos.addEventListener('click', adicionarAlunosTurma);
+
+      els.movimentacaoTipo.addEventListener('change', atualizarCamposMovimentacao);
+      els.btnCancelarMovimentacao.addEventListener('click', () => els.movimentacaoDialog.close());
+      els.btnConfirmarMovimentacao.addEventListener('click', confirmarMovimentacao);
+
+      els.btnCancelarEdicaoAluno.addEventListener('click', () => els.editarAlunoDialog.close());
+      els.btnConfirmarEdicaoAluno.addEventListener('click', confirmarEdicaoAluno);
+
+      els.btnCancelarRelato.addEventListener('click', () => els.relatoAlunoDialog.close());
+      els.btnConfirmarRelato.addEventListener('click', confirmarRelatoAluno);
+
+      window.addEventListener('online', atualizarIndicadorConexao);
+      window.addEventListener('offline', atualizarIndicadorConexao);
+
+      window.addEventListener('beforeunload', event => {
+        if (!alteracoesNaoSalvas) return;
+        event.preventDefault();
+        event.returnValue = '';
+      });
+    }
+
+    function iniciarApp() {
+      mapearElementos();
+      registrarEventos();
+      definirDataHoje();
+      renderAnos();
+      atualizarSelectsTurmas();
+      carregarAlunosGestao();
+      carregarOuPrepararAula();
+      atualizarIndicadorConexao();
+      atualizarEstadoAnoUI();
+      atualizarIndicadorAlteracoes();
+    }
+
+    async function salvarAula(opcoes = {}) {
+      const silencioso = Boolean(opcoes.silencioso);
+
+      if (anoEncerrado()) {
+        if (!silencioso) alert('Este ano letivo está encerrado e não aceita novas alterações.');
+        return false;
+      }
+
+      const turmaId = contextoAulaAtual.turmaId || els.selectTurma.value;
+      const data = contextoAulaAtual.data || els.dataAula.value;
+      const turma = state.turmas[turmaId];
+
+      if (!turma) {
+        if (!silencioso) alert('Cadastre ou selecione uma turma ativa.');
+        return false;
+      }
+
+      if (turma.arquivada) {
+        if (!silencioso) alert('Esta turma está arquivada.');
+        return false;
+      }
+
+      if (!data) {
+        if (!silencioso) alert('Selecione a data da aula.');
+        return false;
+      }
+
+      const aulaExistente = encontrarAula(turma.id, data);
+      const aula = {
+        id: aulaExistente?.id || aulaAtualId || gerarId('aula'),
+        turmaId: turma.id,
+        data,
+        conteudo: els.conteudoAula.value.trim(),
+        anotacoes: els.anotacoesAula.value.trim(),
+        alunos: structuredCloneSeguro(alunosEstadoAtual),
+        sync: {
+          status: 'pendente',
+          updatedAt: new Date().toISOString()
+        }
+      };
+
+      if (aulaExistente) {
+        state.aulas[state.aulas.findIndex(a => a.id === aulaExistente.id)] = aula;
+      } else {
+        state.aulas.push(aula);
+      }
+
+      aulaAtualId = aula.id;
+      removerRascunho(turma.id, data);
+
+      if (!salvarEstado()) return false;
+
+      alteracoesNaoSalvas = false;
+      atualizarIndicadorAlteracoes();
+      atualizarModoAula(aula);
+
+      const resultado = await sincronizarAula(aula);
+      aula.sync.status = resultado;
+      aula.sync.updatedAt = new Date().toISOString();
+      salvarEstado();
+      atualizarSyncStatus(resultado);
+      renderRelatorio();
+
+      if (!silencioso) {
+        alert(resultado === 'enviado'
+          ? `Aula de ${state.anoAtual} salva e enviada para sincronização com o Google Sheets.`
+          : 'Aula salva no aparelho. O envio ao Google ficou pendente.');
+      }
+
+      return true;
+    }
+
+    async function sincronizarAula(aula) {
+      if (!navigator.onLine) return 'pendente';
+
+      const turma = state.turmas[aula.turmaId];
+      if (!turma) return 'pendente';
+
+      const registros = turma.alunos.map(aluno => {
+        normalizarAlunoV5(aluno);
+
+        const e = aula.alunos[aluno.id] || {
+          status: 'Inativo',
+          visto: false,
+          computar: false,
+          relato: ''
+        };
+
+        return {
+          aulaId: aula.id,
+          data: aula.data,
+          turma: turma.nome,
+          turmaId: turma.id,
+          aluno: aluno.nome,
+          alunoId: aluno.id,
+          status: e.computar === false ? 'Inativo' : e.status,
+          visto: e.visto ? 'Sim' : 'Nao',
+          computar: e.computar !== false,
+          conteudo: aula.conteudo,
+          anotacoes: aula.anotacoes,
+          statusAluno: aluno.status || 'ativo',
+          dataEntrada: aluno.dataEntrada || '',
+          dataSaida: aluno.dataSaida || '',
+          motivoSaida: aluno.motivoSaida || '',
+          turmaDestinoId: aluno.turmaDestinoId || '',
+          formaAvaliacao: aluno.formaAvaliacao || 'regular',
+          registroPedagogico: e.relato || ''
+        };
+      });
+
+      try {
+        const resposta = await chamarServidor({
+          acao: 'salvarAula',
+          anoLetivo: String(state.anoAtual),
+          aulaId: aula.id,
+          turmaArquivada: Boolean(turma.arquivada),
+          registros
+        });
+
+        if (!resposta || resposta.result !== 'sucesso') {
+          throw new Error(resposta?.error || 'Falha ao enviar a operação.');
+        }
+
+        return 'enviado';
+      } catch (error) {
+        console.error('Falha de sincronização:', error);
+        return 'pendente';
+      }
+    }
+
+    async function limparDadosTesteAntigos() {
+      const ok = confirm(
+        'Remover definitivamente os dados fictícios de teste?\n\n' +
+        'Serão removidos apenas a aba "Teste", a turma fictícia "Turma 101" e registros associados a esses testes.'
+      );
+
+      if (!ok) return;
+
+      Object.entries(state.turmas).forEach(([id, turma]) => {
+        if (turmaFicticiaPadrao(turma) || turma.nome === 'Turma 101') {
+          delete state.turmas[id];
+          state.aulas = state.aulas.filter(a => a.turmaId !== id);
+        }
+      });
+
+      dadosAnoAtual().turmas = state.turmas;
+      dadosAnoAtual().aulas = state.aulas;
+      salvarEstado();
+
+      await sincronizarAcaoServidor({
+        acao: 'limparTestes',
+        anoLetivo: String(state.anoAtual)
+      });
+
+      atualizarSelectsTurmas();
+      carregarAlunosGestao();
+      carregarOuPrepararAula();
+      renderRelatorio();
+
+      alert('Limpeza de dados de teste solicitada.');
+    }
+
   </script>
 
   <script>

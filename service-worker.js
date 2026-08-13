@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'diario-online-v3-local-encryption';
+const CACHE_VERSION = 'diario-online-v4-pedagogico';
 const STATIC_CACHE = CACHE_VERSION + '-static';
 
 const APP_SHELL = [

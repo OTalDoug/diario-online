@@ -506,7 +506,7 @@
   <header>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
       <h1 style="margin-bottom:10px;">Diário de Classe</h1>
-      <span style="font-size:.68rem;color:var(--text-muted);font-weight:700;">V7.2 • restauração rápida</span>
+      <span style="font-size:.68rem;color:var(--text-muted);font-weight:700;">V7.3 • restauração corrigida</span>
       <button type="button" onclick="bloquearDiario()" style="
         border:1px solid var(--border);
         background:#fff;
@@ -870,8 +870,22 @@
 
       try {
         state = await carregarEstadoSeguro(token);
-        await sincronizarEstadoInicialComServidor();
+        removerDadosFicticiosLocaisConhecidos();
+        await persistirEstadoSeguro(state);
+
         iniciarApp();
+
+        const banner = document.getElementById('recovery-banner');
+        if (banner) {
+          banner.style.display = 'block';
+          banner.style.background = '#fffbeb';
+          banner.style.color = '#92400e';
+          banner.style.borderColor = '#fde68a';
+          banner.textContent = 'Restaurando turmas e alunos a partir do Google…';
+        }
+
+        sincronizarEstadoInicialComServidor();
+
       } catch (error) {
         console.error('Falha ao abrir os dados locais protegidos:', error);
         sessionStorage.removeItem(AUTH_SESSION_KEY);
@@ -1669,7 +1683,10 @@ function registrarEventos() {
       els.movimentacaoTipo.addEventListener('change', atualizarCamposMovimentacao);
       els.btnCancelarMovimentacao.addEventListener('click', () => els.movimentacaoDialog.close());
       els.btnConfirmarMovimentacao.addEventListener('click', confirmarMovimentacao);
-      window.addEventListener('online', atualizarIndicadorConexao);
+      window.addEventListener('online', () => {
+        atualizarIndicadorConexao();
+        sincronizarEstadoInicialComServidor();
+      });
       window.addEventListener('offline', atualizarIndicadorConexao);
     }
 
@@ -2163,8 +2180,8 @@ async function salvarAula() {
         setTimeout(() => {
           if (concluido) return;
           limpar();
-          reject(new Error('O servidor não respondeu em até 90 segundos.'));
-        }, 90000);
+          reject(new Error('O servidor não respondeu em até 45 segundos.'));
+        }, 45000);
       });
     }
 
@@ -2262,8 +2279,48 @@ async function sincronizarAcaoServidor(payload) {
       return resultado;
     }
 
+
+    function removerDadosFicticiosLocaisConhecidos() {
+      if (!state?.anos) return;
+
+      Object.values(state.anos).forEach(anoDados => {
+        const turmas = anoDados.turmas || {};
+
+        Object.entries(turmas).forEach(([id, turma]) => {
+          if (
+            turma?.nome === '701' ||
+            turma?.nome === 'Turma 101' ||
+            turmaFicticiaPadrao(turma)
+          ) {
+            delete turmas[id];
+            anoDados.aulas = (anoDados.aulas || []).filter(a => a.turmaId !== id);
+
+            Object.keys(anoDados.rascunhos || {}).forEach(chave => {
+              if (chave.startsWith(id + '__')) {
+                delete anoDados.rascunhos[chave];
+              }
+            });
+          }
+        });
+      });
+
+      ativarAnoNoEstado(state, String(state.anoAtual));
+    }
+
+
     async function sincronizarEstadoInicialComServidor() {
-      if (!navigator.onLine) return;
+      if (!navigator.onLine) {
+        const banner = document.getElementById('recovery-banner');
+        if (banner) {
+          banner.style.display = 'block';
+          banner.style.background = '#fff7ed';
+          banner.style.color = '#9a3412';
+          banner.style.borderColor = '#fed7aa';
+          banner.textContent =
+            'Sem internet. As turmas serão restauradas do Google quando a conexão voltar.';
+        }
+        return;
+      }
 
       try {
         const resposta = await chamarServidor({
@@ -2273,19 +2330,34 @@ async function sincronizarAcaoServidor(payload) {
 
         const remoto = resposta.estado || null;
 
-        if (remoto) {
-          state = mesclarEstadoServidor(state, remoto);
-          await persistirEstadoSeguro(state);
-
-          const banner = document.getElementById('recovery-banner');
-          const info = resposta.restauracao || remoto.restauracao;
-
-          if (banner && info) {
-            banner.style.display = 'block';
-            banner.textContent =
-              `✓ Dados restaurados do Google: ${info.turmas} turma(s) e ${info.alunos} aluno(s).`;
-          }
+        if (!remoto) {
+          throw new Error('O Google respondeu sem os dados do Diário.');
         }
+
+        state = mesclarEstadoServidor(state, remoto);
+        removerDadosFicticiosLocaisConhecidos();
+        await persistirEstadoSeguro(state);
+
+        renderAnos();
+        atualizarSelectsTurmas();
+        carregarAlunosGestao();
+        carregarOuPrepararAula();
+        renderRelatorio();
+        atualizarEstadoAnoUI();
+
+        const banner = document.getElementById('recovery-banner');
+        const info = resposta.restauracao || remoto.restauracao;
+
+        if (banner) {
+          banner.style.display = 'block';
+          banner.style.background = '#ecfdf5';
+          banner.style.color = '#166534';
+          banner.style.borderColor = '#bbf7d0';
+          banner.textContent = info
+            ? `✓ Dados restaurados do Google: ${info.turmas} turma(s) e ${info.alunos} aluno(s).`
+            : '✓ Dados restaurados do Google.';
+        }
+
       } catch (error) {
         console.error('Falha ao restaurar os dados a partir do Google:', error);
 

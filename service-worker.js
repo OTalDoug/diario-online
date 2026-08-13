@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'diario-online-v7-3-top-postmessage';
+const CACHE_VERSION = 'diario-online-v7-5-unsaved-guard';
 const STATIC_CACHE = CACHE_VERSION + '-static';
 
 const APP_SHELL = [

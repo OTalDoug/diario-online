@@ -506,7 +506,7 @@
   <header>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
       <h1 style="margin-bottom:10px;">Diário de Classe</h1>
-      <span style="font-size:.68rem;color:var(--text-muted);font-weight:700;">V7.3 • restauração corrigida</span>
+      <span style="font-size:.68rem;color:var(--text-muted);font-weight:700;">V7.5 • proteção contra perda</span>
       <button type="button" onclick="bloquearDiario()" style="
         border:1px solid var(--border);
         background:#fff;
@@ -2287,10 +2287,19 @@ async function sincronizarAcaoServidor(payload) {
         const turmas = anoDados.turmas || {};
 
         Object.entries(turmas).forEach(([id, turma]) => {
+          const nomes = (turma?.alunos || [])
+            .map(a => String(a.nome || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase())
+            .filter(Boolean);
+
+          const somente701Teste =
+            turma?.nome === '701' &&
+            nomes.length > 0 &&
+            nomes.every(nome => ['CLAUDIA', 'JANICE'].includes(nome));
+
           if (
-            turma?.nome === '701' ||
             turma?.nome === 'Turma 101' ||
-            turmaFicticiaPadrao(turma)
+            turmaFicticiaPadrao(turma) ||
+            somente701Teste
           ) {
             delete turmas[id];
             anoDados.aulas = (anoDados.aulas || []).filter(a => a.turmaId !== id);
@@ -2620,7 +2629,14 @@ async function sincronizarAcaoServidor(payload) {
 
     function atualizarIndicadorAlteracoes() {
       if (!els.unsavedStatus) return;
-      els.unsavedStatus.style.display = alteracoesNaoSalvas ? 'inline-flex' : 'none';
+
+      const sujo = existemMudancasNaoSalvas();
+      alteracoesNaoSalvas = sujo;
+
+      els.unsavedStatus.style.display = sujo ? 'inline-flex' : 'none';
+      els.unsavedStatus.textContent = sujo
+        ? '● Alterações não salvas'
+        : '';
     }
 
     function carregarOuPrepararAula() {
@@ -3039,13 +3055,108 @@ async function sincronizarAcaoServidor(payload) {
       alert('Movimentação registrada. O histórico anterior foi preservado.');
     }
 
+
+    function normalizarEstadoAlunoParaComparacao(estado) {
+      return {
+        status: estado?.status || 'Presente',
+        visto: Boolean(estado?.visto),
+        computar: estado?.computar !== false,
+        relato: String(estado?.relato || '').trim()
+      };
+    }
+
+    function assinaturaAulaAtual() {
+      const alunos = {};
+
+      Object.keys(alunosEstadoAtual || {})
+        .sort()
+        .forEach(id => {
+          alunos[id] = normalizarEstadoAlunoParaComparacao(alunosEstadoAtual[id]);
+        });
+
+      return JSON.stringify({
+        conteudo: String(els.conteudoAula?.value || '').trim(),
+        anotacoes: String(els.anotacoesAula?.value || '').trim(),
+        alunos
+      });
+    }
+
+    function assinaturaAulaSalva() {
+      const turmaId = contextoAulaAtual.turmaId;
+      const data = contextoAulaAtual.data;
+
+      if (!turmaId || !data) return null;
+
+      const aula = encontrarAula(turmaId, data);
+      if (!aula) return null;
+
+      const alunos = {};
+
+      Object.keys(aula.alunos || {})
+        .sort()
+        .forEach(id => {
+          alunos[id] = normalizarEstadoAlunoParaComparacao(aula.alunos[id]);
+        });
+
+      return JSON.stringify({
+        conteudo: String(aula.conteudo || '').trim(),
+        anotacoes: String(aula.anotacoes || '').trim(),
+        alunos
+      });
+    }
+
+    function existemMudancasNaoSalvas() {
+      if (alteracoesNaoSalvas) return true;
+
+      const turmaId = contextoAulaAtual.turmaId;
+      const data = contextoAulaAtual.data;
+
+      if (!turmaId || !data) return false;
+
+      // Se existe rascunho, a aula ainda não foi consolidada.
+      if (obterRascunho(turmaId, data)) return true;
+
+      const atual = assinaturaAulaAtual();
+      const salva = assinaturaAulaSalva();
+
+      // Aula nova com qualquer conteúdo/alteração diferente do estado inicial.
+      if (salva === null) {
+        const turma = state.turmas[turmaId];
+        if (!turma) return false;
+
+        if (String(els.conteudoAula?.value || '').trim()) return true;
+        if (String(els.anotacoesAula?.value || '').trim()) return true;
+
+        return turma.alunos.some(aluno => {
+          const e = alunosEstadoAtual[aluno.id];
+          if (!e || e.computar === false) return false;
+
+          return (
+            e.status !== 'Presente' ||
+            Boolean(e.visto) ||
+            Boolean(String(e.relato || '').trim())
+          );
+        });
+      }
+
+      return atual !== salva;
+    }
+
+
     async function confirmarTrocaProtegida(tipo, novoValor, valorAnterior) {
-      if (!alteracoesNaoSalvas || ignorarProtecaoTroca) return true;
+      if (ignorarProtecaoTroca) return true;
+      if (!existemMudancasNaoSalvas()) return true;
+
+      const destino =
+        tipo === 'turma' ? 'outra turma' :
+        tipo === 'data' ? 'outra data' :
+        'outro ano letivo';
 
       const salvar = confirm(
-        'Há alterações não salvas nesta aula.\n\n' +
-        'Clique em OK para salvar antes de continuar.\n' +
-        'Clique em Cancelar para permanecer nesta aula.'
+        '⚠️ Existem alterações não salvas nesta aula.\n\n' +
+        'Antes de abrir ' + destino + ', esta aula precisa ser salva.\n\n' +
+        'OK = Salvar aula e continuar\n' +
+        'Cancelar = Permanecer nesta aula'
       );
 
       if (!salvar) {
@@ -3053,7 +3164,16 @@ async function sincronizarAcaoServidor(payload) {
       }
 
       const salvo = await salvarAula({ silencioso: true });
-      return Boolean(salvo);
+
+      if (!salvo) {
+        alert(
+          'Não foi possível salvar esta aula. ' +
+          'A troca foi cancelada para evitar perda de dados.'
+        );
+        return false;
+      }
+
+      return true;
     }
 
     async function tratarTrocaTurma(event) {
@@ -3065,9 +3185,13 @@ async function sincronizarAcaoServidor(payload) {
         return;
       }
 
+      // Reverte primeiro; só muda de fato depois de salvar.
       event.target.value = anterior;
 
-      if (!(await confirmarTrocaProtegida('turma', novo, anterior))) {
+      const podeTrocar = await confirmarTrocaProtegida('turma', novo, anterior);
+
+      if (!podeTrocar) {
+        event.target.value = anterior;
         return;
       }
 
@@ -3088,7 +3212,10 @@ async function sincronizarAcaoServidor(payload) {
 
       event.target.value = anterior;
 
-      if (!(await confirmarTrocaProtegida('data', novo, anterior))) {
+      const podeTrocar = await confirmarTrocaProtegida('data', novo, anterior);
+
+      if (!podeTrocar) {
+        event.target.value = anterior;
         return;
       }
 
@@ -3102,14 +3229,17 @@ async function sincronizarAcaoServidor(payload) {
       const novo = event.target.value;
       const anterior = String(contextoAulaAtual.ano || state.anoAtual);
 
-      if (novo === anterior || ignorarProtecaoTroca || !alteracoesNaoSalvas) {
+      if (novo === anterior || ignorarProtecaoTroca) {
         trocarAnoLetivoDireto(novo);
         return;
       }
 
       event.target.value = anterior;
 
-      if (!(await confirmarTrocaProtegida('ano', novo, anterior))) {
+      const podeTrocar = await confirmarTrocaProtegida('ano', novo, anterior);
+
+      if (!podeTrocar) {
+        event.target.value = anterior;
         return;
       }
 
@@ -3228,7 +3358,7 @@ async function sincronizarAcaoServidor(payload) {
       window.addEventListener('offline', atualizarIndicadorConexao);
 
       window.addEventListener('beforeunload', event => {
-        if (!alteracoesNaoSalvas) return;
+        if (!existemMudancasNaoSalvas()) return;
         event.preventDefault();
         event.returnValue = '';
       });

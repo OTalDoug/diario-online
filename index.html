@@ -506,7 +506,7 @@
   <header>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
       <h1 style="margin-bottom:10px;">Diário de Classe</h1>
-      <span style="font-size:.68rem;color:var(--text-muted);font-weight:700;">V7.5 • proteção contra perda</span>
+      <span style="font-size:.68rem;color:var(--text-muted);font-weight:700;">V7.6 • restauração estável</span>
       <button type="button" onclick="bloquearDiario()" style="
         border:1px solid var(--border);
         background:#fff;
@@ -3143,32 +3143,44 @@ async function sincronizarAcaoServidor(payload) {
     }
 
 
-    async function confirmarTrocaProtegida(tipo, novoValor, valorAnterior) {
+    async function confirmarTrocaProtegida(tipo) {
       if (ignorarProtecaoTroca) return true;
-      if (!existemMudancasNaoSalvas()) return true;
+
+      const turmaIdAtual = contextoAulaAtual.turmaId;
+      const dataAtual = contextoAulaAtual.data;
+
+      const temRascunho = Boolean(
+        turmaIdAtual &&
+        dataAtual &&
+        obterRascunho(turmaIdAtual, dataAtual)
+      );
+
+      const precisaSalvar =
+        Boolean(alteracoesNaoSalvas) ||
+        temRascunho ||
+        existemMudancasNaoSalvas();
+
+      if (!precisaSalvar) return true;
 
       const destino =
         tipo === 'turma' ? 'outra turma' :
         tipo === 'data' ? 'outra data' :
         'outro ano letivo';
 
-      const salvar = confirm(
-        '⚠️ Existem alterações não salvas nesta aula.\n\n' +
-        'Antes de abrir ' + destino + ', esta aula precisa ser salva.\n\n' +
-        'OK = Salvar aula e continuar\n' +
-        'Cancelar = Permanecer nesta aula'
+      const salvar = window.confirm(
+        '⚠️ ALTERAÇÕES NÃO SALVAS\n\n' +
+        'Você alterou esta aula e tentou abrir ' + destino + '.\n\n' +
+        'OK = salvar esta aula e continuar\n' +
+        'Cancelar = continuar nesta aula sem perder as alterações'
       );
 
-      if (!salvar) {
-        return false;
-      }
+      if (!salvar) return false;
 
       const salvo = await salvarAula({ silencioso: true });
 
       if (!salvo) {
-        alert(
-          'Não foi possível salvar esta aula. ' +
-          'A troca foi cancelada para evitar perda de dados.'
+        window.alert(
+          'A aula não pôde ser salva. A troca foi cancelada para evitar perda de dados.'
         );
         return false;
       }
@@ -3177,7 +3189,8 @@ async function sincronizarAcaoServidor(payload) {
     }
 
     async function tratarTrocaTurma(event) {
-      const novo = event.target.value;
+      const seletor = event.currentTarget || event.target || els.selectTurma;
+      const novo = seletor.value;
       const anterior = contextoAulaAtual.turmaId;
 
       if (!anterior || novo === anterior || ignorarProtecaoTroca) {
@@ -3185,24 +3198,21 @@ async function sincronizarAcaoServidor(payload) {
         return;
       }
 
-      // Reverte primeiro; só muda de fato depois de salvar.
-      event.target.value = anterior;
+      // A interface permanece na aula atual enquanto o usuário decide.
+      seletor.value = anterior;
 
-      const podeTrocar = await confirmarTrocaProtegida('turma', novo, anterior);
-
-      if (!podeTrocar) {
-        event.target.value = anterior;
-        return;
-      }
+      const podeTrocar = await confirmarTrocaProtegida('turma');
+      if (!podeTrocar) return;
 
       ignorarProtecaoTroca = true;
-      event.target.value = novo;
+      seletor.value = novo;
       carregarOuPrepararAula();
       ignorarProtecaoTroca = false;
     }
 
     async function tratarTrocaData(event) {
-      const novo = event.target.value;
+      const campo = event.currentTarget || event.target || els.dataAula;
+      const novo = campo.value;
       const anterior = contextoAulaAtual.data;
 
       if (!anterior || novo === anterior || ignorarProtecaoTroca) {
@@ -3210,23 +3220,20 @@ async function sincronizarAcaoServidor(payload) {
         return;
       }
 
-      event.target.value = anterior;
+      campo.value = anterior;
 
-      const podeTrocar = await confirmarTrocaProtegida('data', novo, anterior);
-
-      if (!podeTrocar) {
-        event.target.value = anterior;
-        return;
-      }
+      const podeTrocar = await confirmarTrocaProtegida('data');
+      if (!podeTrocar) return;
 
       ignorarProtecaoTroca = true;
-      event.target.value = novo;
+      campo.value = novo;
       carregarOuPrepararAula();
       ignorarProtecaoTroca = false;
     }
 
     async function tratarTrocaAno(event) {
-      const novo = event.target.value;
+      const seletor = event.currentTarget || event.target || els.selectAnoLetivo;
+      const novo = seletor.value;
       const anterior = String(contextoAulaAtual.ano || state.anoAtual);
 
       if (novo === anterior || ignorarProtecaoTroca) {
@@ -3234,17 +3241,13 @@ async function sincronizarAcaoServidor(payload) {
         return;
       }
 
-      event.target.value = anterior;
+      seletor.value = anterior;
 
-      const podeTrocar = await confirmarTrocaProtegida('ano', novo, anterior);
-
-      if (!podeTrocar) {
-        event.target.value = anterior;
-        return;
-      }
+      const podeTrocar = await confirmarTrocaProtegida('ano');
+      if (!podeTrocar) return;
 
       ignorarProtecaoTroca = true;
-      event.target.value = novo;
+      seletor.value = novo;
       trocarAnoLetivoDireto(novo);
       ignorarProtecaoTroca = false;
     }
@@ -3322,37 +3325,37 @@ async function sincronizarAcaoServidor(payload) {
 
     function registrarEventos() {
       document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.addEventListener('click', () => switchTab(btn.dataset.tab, btn));
+        btn.onclick = () => switchTab(btn.dataset.tab, btn);
       });
 
-      els.selectAnoLetivo.addEventListener('change', tratarTrocaAno);
-      els.btnNovoAno.addEventListener('click', criarNovoAnoLetivo);
-      els.btnEncerrarAno.addEventListener('click', encerrarAnoLetivo);
-      els.btnArquivarTurma.addEventListener('click', alternarArquivoTurma);
-      els.btnExcluirTurma.addEventListener('click', excluirTurmaDefinitivamente);
+      els.selectAnoLetivo.onchange = tratarTrocaAno;
+      els.btnNovoAno.onclick = criarNovoAnoLetivo;
+      els.btnEncerrarAno.onclick = encerrarAnoLetivo;
+      els.btnArquivarTurma.onclick = alternarArquivoTurma;
+      els.btnExcluirTurma.onclick = excluirTurmaDefinitivamente;
 
-      els.selectTurma.addEventListener('change', tratarTrocaTurma);
-      els.dataAula.addEventListener('change', tratarTrocaData);
-      els.selectTurmaRelatorio.addEventListener('change', renderRelatorio);
-      els.selectTurmaGestao.addEventListener('change', carregarAlunosGestao);
+      els.selectTurma.onchange = tratarTrocaTurma;
+      els.dataAula.onchange = tratarTrocaData;
+      els.selectTurmaRelatorio.onchange = renderRelatorio;
+      els.selectTurmaGestao.onchange = carregarAlunosGestao;
 
-      els.conteudoAula.addEventListener('input', marcarAlteracaoLocal);
-      els.anotacoesAula.addEventListener('input', marcarAlteracaoLocal);
+      els.conteudoAula.oninput = marcarAlteracaoLocal;
+      els.anotacoesAula.oninput = marcarAlteracaoLocal;
 
-      els.btnSalvarAula.addEventListener('click', () => salvarAula());
-      els.btnExportarCsv.addEventListener('click', exportarCSV);
-      els.btnCriarTurma.addEventListener('click', criarTurma);
-      els.btnSalvarAlunos.addEventListener('click', adicionarAlunosTurma);
+      els.btnSalvarAula.onclick = () => salvarAula();
+      els.btnExportarCsv.onclick = exportarCSV;
+      els.btnCriarTurma.onclick = criarTurma;
+      els.btnSalvarAlunos.onclick = adicionarAlunosTurma;
 
-      els.movimentacaoTipo.addEventListener('change', atualizarCamposMovimentacao);
-      els.btnCancelarMovimentacao.addEventListener('click', () => els.movimentacaoDialog.close());
-      els.btnConfirmarMovimentacao.addEventListener('click', confirmarMovimentacao);
+      els.movimentacaoTipo.onchange = atualizarCamposMovimentacao;
+      els.btnCancelarMovimentacao.onclick = () => els.movimentacaoDialog.close();
+      els.btnConfirmarMovimentacao.onclick = confirmarMovimentacao;
 
-      els.btnCancelarEdicaoAluno.addEventListener('click', () => els.editarAlunoDialog.close());
-      els.btnConfirmarEdicaoAluno.addEventListener('click', confirmarEdicaoAluno);
+      els.btnCancelarEdicaoAluno.onclick = () => els.editarAlunoDialog.close();
+      els.btnConfirmarEdicaoAluno.onclick = confirmarEdicaoAluno;
 
-      els.btnCancelarRelato.addEventListener('click', () => els.relatoAlunoDialog.close());
-      els.btnConfirmarRelato.addEventListener('click', confirmarRelatoAluno);
+      els.btnCancelarRelato.onclick = () => els.relatoAlunoDialog.close();
+      els.btnConfirmarRelato.onclick = confirmarRelatoAluno;
 
       window.addEventListener('online', atualizarIndicadorConexao);
       window.addEventListener('offline', atualizarIndicadorConexao);

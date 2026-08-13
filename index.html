@@ -506,7 +506,7 @@
   <header>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
       <h1 style="margin-bottom:10px;">Diário de Classe</h1>
-      <span style="font-size:.68rem;color:var(--text-muted);font-weight:700;">V6 • sincronização central</span>
+      <span style="font-size:.68rem;color:var(--text-muted);font-weight:700;">V7 • restauração das turmas</span>
       <button type="button" onclick="bloquearDiario()" style="
         border:1px solid var(--border);
         background:#fff;
@@ -530,7 +530,21 @@
       <button class="tab-btn" type="button" data-tab="relatorio">📊 Visão Geral</button>
       <button class="tab-btn" type="button" data-tab="gestao">⚙️ Turmas</button>
     </nav>
-  </header>
+  
+    <div id="recovery-banner" style="
+      display:none;
+      max-width:680px;
+      margin:10px auto 0;
+      padding:10px 12px;
+      border-radius:10px;
+      background:#ecfdf5;
+      color:#166534;
+      border:1px solid #bbf7d0;
+      font-size:.78rem;
+      font-weight:700;
+    "></div>
+
+</header>
 
   <main class="container">
     <section id="tab-chamada" class="tab-content active">
@@ -2237,45 +2251,12 @@ async function sincronizarAcaoServidor(payload) {
     function mesclarEstadoServidor(local, remoto) {
       if (!remoto || !remoto.anos) return local;
 
-      const resultado = remoto;
       const ano = String(remoto.anoAtual || local?.anoAtual || new Date().getFullYear());
+      const resultado = remoto;
 
       if (!resultado.anos[ano]) return local;
 
-      const remotoAno = resultado.anos[ano];
-      const localAno = local?.anos?.[ano];
-
-      remotoAno.rascunhos = localAno?.rascunhos || {};
-
-      // Preserva cadastros locais ainda não conhecidos pelo servidor.
-      if (localAno?.turmas) {
-        Object.entries(localAno.turmas).forEach(([turmaId, turmaLocal]) => {
-          if (!remotoAno.turmas[turmaId]) {
-            remotoAno.turmas[turmaId] = turmaLocal;
-            return;
-          }
-
-          const turmaRemota = remotoAno.turmas[turmaId];
-          const idsRemotos = new Set((turmaRemota.alunos || []).map(a => a.id));
-
-          (turmaLocal.alunos || []).forEach(alunoLocal => {
-            if (!idsRemotos.has(alunoLocal.id)) {
-              turmaRemota.alunos.push(alunoLocal);
-            }
-          });
-        });
-      }
-
-      // Preserva aulas locais pendentes que ainda não chegaram ao servidor.
-      const idsRemotosAulas = new Set((remotoAno.aulas || []).map(a => a.id));
-      (localAno?.aulas || []).forEach(aulaLocal => {
-        if (
-          !idsRemotosAulas.has(aulaLocal.id) &&
-          aulaLocal.sync?.status !== 'enviado'
-        ) {
-          remotoAno.aulas.push(aulaLocal);
-        }
-      });
+      resultado.anos[ano].rascunhos = local?.anos?.[ano]?.rascunhos || {};
 
       ativarAnoNoEstado(resultado, ano);
       return resultado;
@@ -2285,14 +2266,38 @@ async function sincronizarAcaoServidor(payload) {
       if (!navigator.onLine) return;
 
       try {
-        const remoto = await carregarEstadoDoServidor();
+        const resposta = await chamarServidor({
+          acao: 'restaurarCadastros',
+          anoLetivo: String(state?.anoAtual || new Date().getFullYear())
+        });
+
+        const remoto = resposta.estado || null;
 
         if (remoto) {
           state = mesclarEstadoServidor(state, remoto);
           await persistirEstadoSeguro(state);
+
+          const banner = document.getElementById('recovery-banner');
+          const info = resposta.restauracao || remoto.restauracao;
+
+          if (banner && info) {
+            banner.style.display = 'block';
+            banner.textContent =
+              `✓ Dados restaurados do Google: ${info.turmas} turma(s) e ${info.alunos} aluno(s).`;
+          }
         }
       } catch (error) {
-        console.warn('Não foi possível atualizar os dados a partir do Google:', error);
+        console.error('Falha ao restaurar os dados a partir do Google:', error);
+
+        const banner = document.getElementById('recovery-banner');
+        if (banner) {
+          banner.style.display = 'block';
+          banner.style.background = '#fff1f2';
+          banner.style.color = '#be123c';
+          banner.style.borderColor = '#fecdd3';
+          banner.textContent =
+            'Não foi possível restaurar as turmas do Google. Não faça novos registros até corrigirmos a conexão.';
+        }
       }
     }
 

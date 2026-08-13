@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'diario-online-v7-6-stable-restore-guard';
+const CACHE_VERSION = 'diario-online-v7-7-token-rotation';
 const STATIC_CACHE = CACHE_VERSION + '-static';
 
 const APP_SHELL = [

@@ -506,7 +506,7 @@
   <header>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
       <h1 style="margin-bottom:10px;">Diário de Classe</h1>
-      <span style="font-size:.68rem;color:var(--text-muted);font-weight:700;">V7.6 • restauração estável</span>
+      <span style="font-size:.68rem;color:var(--text-muted);font-weight:700;">V7.7 • troca de chave segura</span>
       <button type="button" onclick="bloquearDiario()" style="
         border:1px solid var(--border);
         background:#fff;
@@ -868,31 +868,91 @@
         return;
       }
 
+      let recuperadoDoServidor = false;
+
       try {
-        state = await carregarEstadoSeguro(token);
-        removerDadosFicticiosLocaisConhecidos();
-        await persistirEstadoSeguro(state);
+        try {
+          // Caminho normal: abre a cópia local criptografada com a chave atual.
+          state = await carregarEstadoSeguro(token);
+          removerDadosFicticiosLocaisConhecidos();
+          await persistirEstadoSeguro(state);
+        } catch (erroLocal) {
+          // Ao trocar DIARIO_ACCESS_TOKEN, a cópia local ainda foi criptografada
+          // com a chave anterior. Isso NÃO significa necessariamente senha errada.
+          console.warn(
+            'A cópia local não pôde ser aberta com a chave atual. Tentando validar a chave no Google e reconstruir os dados.',
+            erroLocal
+          );
+
+          if (!navigator.onLine) {
+            throw new Error(
+              'A chave foi alterada e os dados locais ainda usam a chave anterior. ' +
+              'Conecte este aparelho à internet para restaurar os dados do Google.'
+            );
+          }
+
+          const resposta = await chamarServidor({
+            acao: 'restaurarCadastros',
+            anoLetivo: String(new Date().getFullYear())
+          });
+
+          const remoto = resposta?.estado;
+
+          if (!remoto) {
+            throw new Error('O Google confirmou a conexão, mas não devolveu o estado do Diário.');
+          }
+
+          // Somente depois que o backend ACEITA a chave nova, substituímos
+          // o cache criptografado antigo por uma cópia nova.
+          localStorage.removeItem(STORAGE_KEY);
+          localStorage.removeItem(STORAGE_KEY_ENC);
+
+          state = migrarParaV4(remoto);
+          removerDadosFicticiosLocaisConhecidos();
+          await persistirEstadoSeguro(state, token);
+          recuperadoDoServidor = true;
+        }
 
         iniciarApp();
 
         const banner = document.getElementById('recovery-banner');
-        if (banner) {
-          banner.style.display = 'block';
-          banner.style.background = '#fffbeb';
-          banner.style.color = '#92400e';
-          banner.style.borderColor = '#fde68a';
-          banner.textContent = 'Restaurando turmas e alunos a partir do Google…';
+
+        if (recuperadoDoServidor) {
+          if (banner) {
+            banner.style.display = 'block';
+            banner.style.background = '#ecfdf5';
+            banner.style.color = '#166534';
+            banner.style.borderColor = '#bbf7d0';
+            banner.textContent =
+              '✓ Nova chave aceita. Dados locais recriados com segurança a partir do Google.';
+          }
+        } else {
+          if (banner) {
+            banner.style.display = 'block';
+            banner.style.background = '#fffbeb';
+            banner.style.color = '#92400e';
+            banner.style.borderColor = '#fde68a';
+            banner.textContent = 'Restaurando turmas e alunos a partir do Google…';
+          }
+
+          sincronizarEstadoInicialComServidor();
         }
 
-        sincronizarEstadoInicialComServidor();
-
       } catch (error) {
-        console.error('Falha ao abrir os dados locais protegidos:', error);
+        console.error('Falha ao abrir o Diário:', error);
         sessionStorage.removeItem(AUTH_SESSION_KEY);
-        bloquearInterface(
-          'Não foi possível abrir os dados locais deste aparelho. ' +
-          'A chave pode estar incorreta ou os dados locais podem ter sido corrompidos.'
-        );
+
+        const mensagem = String(error?.message || error || '');
+
+        if (/Acesso não autorizado/i.test(mensagem)) {
+          bloquearInterface(
+            'A nova chave não foi aceita pelo servidor. Confira o valor de DIARIO_ACCESS_TOKEN e tente novamente.'
+          );
+        } else {
+          bloquearInterface(
+            'Não foi possível abrir o Diário: ' + mensagem
+          );
+        }
       }
     }
 

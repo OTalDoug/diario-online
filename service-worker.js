@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'diario-online-v7-roster-restore';
+const CACHE_VERSION = 'diario-online-v7-1-fix';
 const STATIC_CACHE = CACHE_VERSION + '-static';
 
 const APP_SHELL = [

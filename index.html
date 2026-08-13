@@ -506,7 +506,7 @@
   <header>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
       <h1 style="margin-bottom:10px;">Diário de Classe</h1>
-      <span style="font-size:.68rem;color:var(--text-muted);font-weight:700;">V7 • restauração das turmas</span>
+      <span style="font-size:.68rem;color:var(--text-muted);font-weight:700;">V7.1 • restauração corrigida</span>
       <button type="button" onclick="bloquearDiario()" style="
         border:1px solid var(--border);
         background:#fff;
@@ -2296,7 +2296,9 @@ async function sincronizarAcaoServidor(payload) {
           banner.style.color = '#be123c';
           banner.style.borderColor = '#fecdd3';
           banner.textContent =
-            'Não foi possível restaurar as turmas do Google. Não faça novos registros até corrigirmos a conexão.';
+            'Não foi possível restaurar as turmas do Google: ' +
+            (error?.message || 'erro desconhecido') +
+            '. Não faça novos registros até corrigirmos a conexão.';
         }
       }
     }
